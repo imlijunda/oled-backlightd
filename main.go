@@ -22,6 +22,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to locate ACPI backlight directory.\n")
 		os.Exit(1)
 	}
+	initbr := fmt.Sprintf("%.2f", GetCurrentBrightnessRatio(backlight))
+	_, initerr := exec.Command("xrandr", "--output", output, "--brightness", initbr).Output()
+	if initerr != nil {
+		fmt.Fprintf(os.Stderr, "xrandr error: %s\n", initerr)
+		fmt.Fprintf(os.Stderr, "Failed to set initial brightness.\n")
+		os.Exit(1)
+	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -40,7 +47,7 @@ func main() {
 					sbr := fmt.Sprintf("%.2f", br)
 					_, execerr := exec.Command("xrandr", "--output", output, "--brightness", sbr).Output()
 					if execerr != nil {
-						fmt.Fprintf(os.Stderr, "%s\n", execerr)
+						fmt.Fprintf(os.Stderr, "xrandr error: %s\n", execerr)
 					}
 				}
 			case watchererr := <-watcher.Errors:
