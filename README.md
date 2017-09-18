@@ -5,5 +5,6 @@ This little tool was created for controling the backlight brigthness on my Alien
 
 ## Usage:
 go build
+
 nohup ./oled-backlightd &
 
