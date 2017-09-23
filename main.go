@@ -3,64 +3,57 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 
-	"github.com/fsnotify/fsnotify"
+	"github.com/rjeczalik/notify"
 )
 
 func main() {
 
 	output := GetEmbeddedDP()
 	if output == "" {
-		fmt.Fprintf(os.Stderr, "Failed to find any embeded DisplayPort device.\n")
-		os.Exit(1)
+		log.Fatal("Failed to find any embeded DisplayPort device.")
 	}
 	backlight := GetACPIBacklight()
 	if backlight == "" {
-		fmt.Fprintf(os.Stderr, "Failed to locate ACPI backlight directory.\n")
-		os.Exit(1)
+		log.Fatal("Failed to locate ACPI backlight directory.")
 	}
 	initbr := fmt.Sprintf("%.2f", GetCurrentBrightnessRatio(backlight))
 	_, initerr := exec.Command("xrandr", "--output", output, "--brightness", initbr).Output()
 	if initerr != nil {
-		fmt.Fprintf(os.Stderr, "xrandr error: %s\n", initerr)
-		fmt.Fprintf(os.Stderr, "Failed to set initial brightness.\n")
-		os.Exit(1)
+		log.Fatal("Failed to set initial brightness.")
 	}
 
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s", err)
-		os.Exit(1)
+	c := make(chan notify.EventInfo, 1)
+	if err := notify.Watch(backlight+"/actual_brightness", c, notify.InModify); err != nil {
+		log.Fatal(err)
 	}
-	defer watcher.Close()
+	defer notify.Stop(c)
 
-	done := make(chan bool)
+	csignal := make(chan os.Signal, 1)
+	signal.Notify(csignal, os.Interrupt, os.Kill)
 	go func() {
-		for {
-			select {
-			case event := <-watcher.Events:
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					br := GetCurrentBrightnessRatio(backlight)
-					sbr := fmt.Sprintf("%.2f", br)
-					_, execerr := exec.Command("xrandr", "--output", output, "--brightness", sbr).Output()
-					if execerr != nil {
-						fmt.Fprintf(os.Stderr, "xrandr error: %s\n", execerr)
-					}
-				}
-			case watchererr := <-watcher.Errors:
-				fmt.Fprintf(os.Stderr, "%s", watchererr)
+		s := <-csignal
+		notify.Stop(c)
+		log.Fatal("Recieved signal: ", s)
+	}()
+
+	for {
+		switch ei := <-c; ei.Event() {
+		case notify.InModify:
+			br := fmt.Sprintf("%.2f", GetCurrentBrightnessRatio(backlight))
+			log.Println("Current brightness ", br)
+			_, err := exec.Command("xrandr", "--output", output, "--brightness", br).Output()
+			if err != nil {
+				notify.Stop(c)
+				log.Fatal("Failed to set brightness.")
 			}
 		}
-	}()
-	err = watcher.Add(backlight + "/brightness")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s", err)
-		return
 	}
-	<-done
 }
 
 // GetEmbeddedDP Return the first embeded DisplayPort device reported by xrandr
@@ -100,27 +93,23 @@ func GetCurrentBrightnessRatio(backlight string) float64 {
 	var maxBrightness int
 	fd, err := os.Open(backlight + "/max_brightness")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open max_brightness.\n")
+		log.Fatal("Failed to open max_brightness.")
 	}
 	_, err = fmt.Fscanf(fd, "%d", &maxBrightness)
 	fd.Close()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", err)
-		fmt.Fprintf(os.Stderr, "Failed to read maximum brightness.\n")
-		os.Exit(1)
+		log.Fatal("Failed to read maximum brightness.")
 	}
 
 	var currentBrightness int
-	fd, err = os.Open(backlight + "/brightness")
+	fd, err = os.Open(backlight + "/actual_brightness")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open brightness.\n")
+		log.Fatal("Failed to open brightness.")
 	}
 	_, err = fmt.Fscanf(fd, "%d", &currentBrightness)
 	fd.Close()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s", err)
-		fmt.Fprintf(os.Stderr, "Failed to read brightness.\n")
-		os.Exit(1)
+		log.Fatal("Failed to read brightness.")
 	}
 	ratio := float64(currentBrightness) / float64(maxBrightness)
 
